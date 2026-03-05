@@ -23,7 +23,6 @@ kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 def _find_windows_with_title(title_substring):
     matches = []
     needle = title_substring.lower()
-
     enum_proc = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
 
     def callback(hwnd, _):
@@ -43,13 +42,19 @@ def _find_windows_with_title(title_substring):
     return matches
 
 
+def _resolve_target_hwnd(title_substring):
+    matches = _find_windows_with_title(title_substring)
+    if not matches:
+        raise RuntimeError(f"No visible window found with title containing: {title_substring!r}")
+    return matches[0][0]
+
+
 def _focus_window_by_title(title_substring, timeout_seconds=3):
     matches = _find_windows_with_title(title_substring)
     if not matches:
         raise RuntimeError(f"No visible window found with title containing: {title_substring!r}")
 
     hwnd, full_title = matches[0]
-
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
         if user32.IsIconic(hwnd):
@@ -80,12 +85,12 @@ def _focus_window_by_title(title_substring, timeout_seconds=3):
                 user32.AttachThreadInput(foreground_thread, current_thread, False)
 
         if user32.GetForegroundWindow() == hwnd:
-            # Ensure we are not in menu-accelerator mode before typing.
+            # Prevent accidental menu accelerator state before typing.
             user32.keybd_event(VK_ESCAPE, 0, 0, 0)
             user32.keybd_event(VK_ESCAPE, 0, KEYEVENTF_KEYUP, 0)
             return full_title
 
-        # Fallback for stricter foreground lock cases.
+        # Fallback for stricter foreground lock scenarios.
         user32.keybd_event(VK_MENU, 0, 0, 0)
         user32.keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0)
         user32.BringWindowToTop(hwnd)
@@ -100,94 +105,37 @@ def _focus_window_by_title(title_substring, timeout_seconds=3):
     raise RuntimeError(f"Unable to focus window: {full_title!r}")
 
 
+def _ensure_target_focus(title_substring):
+    target_hwnd = _resolve_target_hwnd(title_substring)
+    if user32.GetForegroundWindow() != target_hwnd:
+        _focus_window_by_title(title_substring)
+
+
 def _count_typeable_chars(text):
     return sum(1 for char in text if char != "\r")
 
 
-def _normalize_newlines(text):
-    return text.replace("\r\n", "\n").replace("\r", "\n")
-
-
-def _text_matches(expected, actual, strict_verify):
-    if strict_verify:
-        return expected == actual
-    return _normalize_newlines(expected) == _normalize_newlines(actual)
-
-
-def _ctrl_hotkey(keyboard, key_char):
-    with keyboard.pressed(Key.ctrl):
-        keyboard.press(key_char)
-        keyboard.release(key_char)
-
-
-def _clear_target_buffer(keyboard, settle_delay):
-    _ctrl_hotkey(keyboard, "a")
-    time.sleep(settle_delay)
-    keyboard.press(Key.backspace)
-    keyboard.release(Key.backspace)
-    time.sleep(settle_delay)
-
-
-def _capture_selected_text(keyboard, copy_timeout, settle_delay):
-    sentinel = f"__clipboard_sync_{time.time_ns()}__"
-    pyperclip.copy(sentinel)
-    time.sleep(settle_delay)
-    _ctrl_hotkey(keyboard, "a")
-    time.sleep(settle_delay)
-    _ctrl_hotkey(keyboard, "c")
-
-    deadline = time.time() + copy_timeout
-    while time.time() < deadline:
-        current = str(pyperclip.paste())
-        if current != sentinel:
-            return current
-        time.sleep(0.02)
-    raise RuntimeError("Timed out while waiting for copied text from target window.")
-
-
-def _chunk_count(text_length, chunk_size):
-    return max(1, (text_length + chunk_size - 1) // chunk_size)
-
-
-def _paste_text_in_chunks(
+def _type_reliable_text(
     text,
-    keyboard,
+    key_delay,
     chunk_size,
-    chunk_delay,
-    clipboard_settle_delay,
+    chunk_pause,
+    refocus_each_chunk,
+    window_title,
+    skip_focus,
     status_callback=None,
     progress_callback=None,
 ):
-    if chunk_size <= 0:
-        raise RuntimeError("chunk_size must be greater than 0.")
-
-    total = len(text)
-    if progress_callback is not None:
-        progress_callback(0, total)
-
-    if total == 0:
-        return
-
-    total_chunks = _chunk_count(total, chunk_size)
-    pasted = 0
-    for chunk_index, start in enumerate(range(0, total, chunk_size), start=1):
-        if status_callback is not None:
-            status_callback(f"Pasting chunk {chunk_index}/{total_chunks}...")
-        chunk = text[start : start + chunk_size]
-        pyperclip.copy(chunk)
-        time.sleep(clipboard_settle_delay)
-        _ctrl_hotkey(keyboard, "v")
-        pasted += len(chunk)
-        if progress_callback is not None:
-            progress_callback(pasted, total)
-        if chunk_delay > 0:
-            time.sleep(chunk_delay)
-
-
-def _type_clipboard_text(text, key_delay, progress_callback=None):
     keyboard = Controller()
     total = _count_typeable_chars(text)
     typed = 0
+    chunk_typed = 0
+
+    if progress_callback is not None:
+        progress_callback(0, total)
+    if status_callback is not None:
+        status_callback("Simulating keypresses (reliable mode)...")
+
     for letter in text:
         if letter == "\r":
             continue
@@ -197,80 +145,34 @@ def _type_clipboard_text(text, key_delay, progress_callback=None):
         else:
             keyboard.press(letter)
             keyboard.release(letter)
+
         typed += 1
+        chunk_typed += 1
         if progress_callback is not None:
             progress_callback(typed, total)
-        time.sleep(key_delay)
 
+        if key_delay > 0:
+            time.sleep(key_delay)
 
-def _run_typing_mode(text, key_delay, status_callback=None, progress_callback=None):
-    if status_callback is not None:
-        status_callback("Simulating keypresses (type mode)...")
-    _type_clipboard_text(text, key_delay, progress_callback=progress_callback)
+        if chunk_typed >= chunk_size:
+            if refocus_each_chunk and not skip_focus:
+                if status_callback is not None:
+                    status_callback(f"Checking focus at {typed}/{total}...")
+                _ensure_target_focus(window_title)
+                if status_callback is not None:
+                    status_callback("Simulating keypresses (reliable mode)...")
+            if chunk_pause > 0:
+                time.sleep(chunk_pause)
+            chunk_typed = 0
+
     if status_callback is not None:
         status_callback("Completed.")
-
-
-def _run_paste_mode(text, args, status_callback=None, progress_callback=None):
-    keyboard = Controller()
-
-    verify_enabled = args.mode == "paste-verify"
-    attempts = args.verify_attempts if verify_enabled else 1
-    expected_text = str(text)
-
-    original_clipboard = pyperclip.paste()
-    try:
-        for attempt in range(1, attempts + 1):
-            if verify_enabled and status_callback is not None:
-                status_callback(f"Reliable mode attempt {attempt}/{attempts}...")
-
-            if verify_enabled or args.clear_before_paste:
-                if status_callback is not None:
-                    status_callback("Clearing target buffer...")
-                _clear_target_buffer(keyboard, args.hotkey_settle_delay)
-
-            _paste_text_in_chunks(
-                expected_text,
-                keyboard,
-                chunk_size=args.chunk_size,
-                chunk_delay=args.chunk_delay,
-                clipboard_settle_delay=args.clipboard_settle_delay,
-                status_callback=status_callback,
-                progress_callback=progress_callback,
-            )
-
-            if not verify_enabled:
-                if status_callback is not None:
-                    status_callback("Completed.")
-                return
-
-            if status_callback is not None:
-                status_callback("Verifying pasted content...")
-            captured = _capture_selected_text(
-                keyboard,
-                copy_timeout=args.copy_timeout,
-                settle_delay=args.hotkey_settle_delay,
-            )
-            if _text_matches(expected_text, captured, args.strict_verify):
-                if status_callback is not None:
-                    status_callback(f"Completed. Verified on attempt {attempt}.")
-                return
-
-            if status_callback is not None and attempt < attempts:
-                status_callback("Verification mismatch. Retrying...")
-
-        raise RuntimeError(
-            "Verification failed after all attempts. Increase delays/chunking or use dedicated target input."
-        )
-    finally:
-        pyperclip.copy(original_clipboard)
 
 
 def _run_transfer(args, status_callback=None, progress_callback=None):
     clip_text = pyperclip.paste()
     if not clip_text:
         raise RuntimeError("Clipboard is empty.")
-
     clip_text = str(clip_text)
 
     if not args.skip_focus:
@@ -280,14 +182,17 @@ def _run_transfer(args, status_callback=None, progress_callback=None):
         if status_callback is not None:
             status_callback(f"Focused: {focused_title}")
 
-    if args.mode == "type":
-        total = _count_typeable_chars(clip_text)
-        if progress_callback is not None:
-            progress_callback(0, total)
-        _run_typing_mode(clip_text, args.key_delay, status_callback=status_callback, progress_callback=progress_callback)
-        return
-
-    _run_paste_mode(clip_text, args, status_callback=status_callback, progress_callback=progress_callback)
+    _type_reliable_text(
+        text=clip_text,
+        key_delay=args.reliable_key_delay,
+        chunk_size=args.reliable_chunk_size,
+        chunk_pause=args.reliable_chunk_pause,
+        refocus_each_chunk=args.refocus_each_chunk,
+        window_title=args.window_title,
+        skip_focus=args.skip_focus,
+        status_callback=status_callback,
+        progress_callback=progress_callback,
+    )
 
 
 class ProgressDialog:
@@ -306,7 +211,7 @@ class ProgressDialog:
         frame.pack(fill="both", expand=True)
 
         self.status_var = tk.StringVar(value="Preparing...")
-        self.count_var = tk.StringVar(value="0 / 0 units")
+        self.count_var = tk.StringVar(value="0 / 0 keypresses")
 
         ttk.Label(frame, text="Status").pack(anchor="w")
         ttk.Label(frame, textvariable=self.status_var).pack(anchor="w", pady=(2, 10))
@@ -348,7 +253,7 @@ class ProgressDialog:
                 current, total = event[1], max(event[2], 1)
                 self.progress.configure(maximum=total)
                 self.progress["value"] = current
-                self.count_var.set(f"{current} / {event[2]} units")
+                self.count_var.set(f"{current} / {event[2]} keypresses")
             elif kind == "done":
                 self.running = False
                 self.close_btn.configure(state="normal")
@@ -381,65 +286,36 @@ def _run_cli(args):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Send clipboard text into a target window using typing or reliable paste modes."
+        description="Send clipboard text into a target window using reliable simulated typing."
     )
     parser.add_argument(
         "--mode",
-        choices=["type", "paste", "paste-verify"],
-        default="type",
-        help="Input mode: key-by-key typing, chunked paste, or chunked paste with verification/retries.",
+        choices=["type-reliable"],
+        default="type-reliable",
+        help="Compatibility flag. Only reliable typing mode is supported.",
     )
     parser.add_argument(
-        "--key-delay",
+        "--reliable-key-delay",
         type=float,
-        default=0.005,
-        help="Delay in seconds between simulated key presses.",
+        default=0.012,
+        help="Delay between keypresses (seconds). Increase to improve reliability.",
     )
     parser.add_argument(
-        "--chunk-size",
+        "--reliable-chunk-size",
         type=int,
-        default=1200,
-        help="Characters per chunk for paste modes.",
+        default=180,
+        help="Characters typed before pausing briefly.",
     )
     parser.add_argument(
-        "--chunk-delay",
+        "--reliable-chunk-pause",
         type=float,
-        default=0.03,
-        help="Delay between chunk pastes for paste modes.",
+        default=0.08,
+        help="Pause between chunks (seconds). Increase for unstable sessions.",
     )
     parser.add_argument(
-        "--clipboard-settle-delay",
-        type=float,
-        default=0.03,
-        help="Delay after writing each chunk to clipboard before Ctrl+V.",
-    )
-    parser.add_argument(
-        "--hotkey-settle-delay",
-        type=float,
-        default=0.05,
-        help="Delay after Ctrl+A/C style hotkeys in paste-verify mode.",
-    )
-    parser.add_argument(
-        "--copy-timeout",
-        type=float,
-        default=2.0,
-        help="Seconds to wait for Ctrl+C read-back in paste-verify mode.",
-    )
-    parser.add_argument(
-        "--verify-attempts",
-        type=int,
-        default=3,
-        help="Number of full paste+verify attempts in paste-verify mode.",
-    )
-    parser.add_argument(
-        "--strict-verify",
+        "--refocus-each-chunk",
         action="store_true",
-        help="Require exact match for verification (default normalizes newline style only).",
-    )
-    parser.add_argument(
-        "--clear-before-paste",
-        action="store_true",
-        help="Clear target text before pasting in plain paste mode.",
+        help="Re-check and restore focus after each chunk.",
     )
     parser.add_argument(
         "--window-title",
@@ -449,18 +325,17 @@ def main():
     parser.add_argument(
         "--skip-focus",
         action="store_true",
-        help="Skip window focusing and type into the current foreground window.",
+        help="Skip focusing and type into whichever window is active.",
     )
     parser.add_argument(
         "--no-gui",
         action="store_true",
         help="Run in terminal mode without the progress dialog.",
     )
+
     args = parser.parse_args()
-    if args.chunk_size < 1:
-        parser.error("--chunk-size must be greater than 0.")
-    if args.verify_attempts < 1:
-        parser.error("--verify-attempts must be greater than 0.")
+    if args.reliable_chunk_size < 1:
+        parser.error("--reliable-chunk-size must be greater than 0.")
 
     if args.no_gui:
         _run_cli(args)
