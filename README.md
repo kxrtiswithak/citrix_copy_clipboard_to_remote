@@ -7,15 +7,41 @@ Reliable simulated typing from host clipboard into a target Citrix/VPN window.
 This project is designed for **Windows only**.
 It relies on Windows APIs and Windows keyboard behavior. Other OSes are not supported.
 
-## Default Usage
+## Requirements and Setup
 
-This command is the baseline:
+This repo includes `requirements.txt` for runtime dependencies.
+
+Install with:
 
 ```powershell
-python copy_citrix.py --mode type-reliable --reliable-key-delay 0.012 --reliable-chunk-size 180
+python -m pip install -r requirements.txt
 ```
 
-`python copy_citrix.py` runs the same reliable mode with the same defaults.
+Run with:
+
+```powershell
+python copy_citrix.py
+```
+
+## Default Behavior
+
+Default run is equivalent to:
+
+```powershell
+python copy_citrix.py --mode type-reliable --reliable-key-delay 0.012 --reliable-chunk-size 180 --copy-after-type
+```
+
+What it does by default:
+
+1. Focuses the target window by title match.
+2. Types clipboard text using reliable chunked keypress simulation.
+3. Sends `Ctrl+A` then `Ctrl+C` inside the target window to place the typed content into the session clipboard.
+
+Disable step 3 with:
+
+```powershell
+python copy_citrix.py --no-copy-after-type
+```
 
 ## Window Title Targeting
 
@@ -40,12 +66,24 @@ python copy_citrix.py --window-title "My Citrix Desktop"
   - Extra pause between chunks to let remote session catch up.
 - `--refocus-each-chunk`
   - Re-checks and restores target focus after every chunk.
+- `--copy-after-type` / `--no-copy-after-type`
+  - Enable or disable the default post-typing `Ctrl+A` + `Ctrl+C` step.
 - `--window-title "<text>"`
   - Changes which window is targeted for typing.
 - `--skip-focus`
   - Types into whichever window is currently active.
 - `--no-gui`
   - Runs in terminal mode instead of the progress dialog.
+
+## Suggested Workflow (Citrix Notepad)
+
+1. In the Citrix session, open Notepad (or another plain text editor) and place cursor in the document.
+2. On host Windows, copy the source text to clipboard.
+3. Trigger `copy_citrix.py` (terminal, shortcut, or hotkey).
+4. Let it complete without changing focus.
+5. Paste from session clipboard where needed in Citrix.
+
+Using Notepad as the initial landing area is recommended for reliability and easy visual verification.
 
 ## GitHub Actions: Zero-Dependency Binary
 
@@ -73,9 +111,11 @@ You can run with one keyboard shortcut.
 "C:\Tools\copy-citrix.exe"
 ```
 4. Open shortcut Properties.
-5. Set a value in `Shortcut key`, e.g. `Ctrl+Alt+V`.
+5. Set `Shortcut key` to `Ctrl+Alt+V` (recommended).
 6. Optional: set `Run` to `Minimized`.
 7. Apply and use that hotkey globally.
+
+Note: `Alt` is typically handled by the host OS even while Citrix is focused, so `Ctrl+Alt+V` usually triggers the host shortcut reliably whether focus is inside or outside the Citrix window.
 
 If you prefer script instead of EXE, target example:
 

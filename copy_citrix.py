@@ -115,6 +115,25 @@ def _count_typeable_chars(text):
     return sum(1 for char in text if char != "\r")
 
 
+def _send_ctrl_hotkey(keyboard, key_char):
+    with keyboard.pressed(Key.ctrl):
+        keyboard.press(key_char)
+        keyboard.release(key_char)
+
+
+def _select_all_and_copy(window_title, skip_focus, status_callback=None):
+    if not skip_focus:
+        _ensure_target_focus(window_title)
+
+    keyboard = Controller()
+    if status_callback is not None:
+        status_callback("Selecting all and copying in target window...")
+    _send_ctrl_hotkey(keyboard, "a")
+    time.sleep(0.05)
+    _send_ctrl_hotkey(keyboard, "c")
+    time.sleep(0.05)
+
+
 def _type_reliable_text(
     text,
     key_delay,
@@ -166,7 +185,7 @@ def _type_reliable_text(
             chunk_typed = 0
 
     if status_callback is not None:
-        status_callback("Completed.")
+        status_callback("Typing complete.")
 
 
 def _run_transfer(args, status_callback=None, progress_callback=None):
@@ -193,6 +212,15 @@ def _run_transfer(args, status_callback=None, progress_callback=None):
         status_callback=status_callback,
         progress_callback=progress_callback,
     )
+
+    if args.copy_after_type:
+        _select_all_and_copy(
+            window_title=args.window_title,
+            skip_focus=args.skip_focus,
+            status_callback=status_callback,
+        )
+    if status_callback is not None:
+        status_callback("Completed.")
 
 
 class ProgressDialog:
@@ -331,6 +359,12 @@ def main():
         "--no-gui",
         action="store_true",
         help="Run in terminal mode without the progress dialog.",
+    )
+    parser.add_argument(
+        "--copy-after-type",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="After typing, send Ctrl+A then Ctrl+C in the target window (enabled by default).",
     )
 
     args = parser.parse_args()
