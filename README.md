@@ -2,67 +2,83 @@
 
 Reliable simulated typing from host clipboard into a target Citrix/VPN window.
 
-## Install
+## OS Caveat
 
-```powershell
-pip install pyperclip pynput
-```
+This project is designed for **Windows only**.
+It relies on Windows APIs and Windows keyboard behavior. Other OSes are not supported.
 
-## Default Behavior
+## Default Usage
 
-The script is now locked to reliable typing mode by default.
-
-This command is the baseline configuration:
+This command is the baseline:
 
 ```powershell
 python copy_citrix.py --mode type-reliable --reliable-key-delay 0.012 --reliable-chunk-size 180
 ```
 
-`python copy_citrix.py` also runs reliable typing with those defaults.
+`python copy_citrix.py` runs the same reliable mode with the same defaults.
 
-## Window Targeting
+## Window Title Targeting
 
-Focus is matched by window title substring:
+Focus is matched by title substring.
 
-- default: `VCSe Production`
-- override with:
+- Default window title match: `VCSe Production`
+- Override example:
 
 ```powershell
-python copy_citrix.py --window-title "Your Citrix/VPN Window Title"
+python copy_citrix.py --window-title "My Citrix Desktop"
 ```
 
-## Tuning Overrides
-
-Use these flags to trade off speed vs reliability:
+## Flag Overrides and Impact
 
 - `--reliable-key-delay <seconds>`
-  - lower: faster typing, higher garble risk
-  - higher: slower typing, better stability
+  - Lower value: faster typing, higher corruption risk on long text.
+  - Higher value: slower typing, better stability.
 - `--reliable-chunk-size <chars>`
-  - larger: fewer pauses, faster throughput, higher long-run risk
-  - smaller: more frequent pauses, better long-run stability
+  - Higher value: fewer pauses, faster throughput, more risk in unstable sessions.
+  - Lower value: more pauses, safer long runs.
 - `--reliable-chunk-pause <seconds>`
-  - lower: faster
-  - higher: gives remote app time to catch up
+  - Extra pause between chunks to let remote session catch up.
 - `--refocus-each-chunk`
-  - checks/restores focus after every chunk
-  - useful if focus occasionally drifts
+  - Re-checks and restores target focus after every chunk.
+- `--window-title "<text>"`
+  - Changes which window is targeted for typing.
+- `--skip-focus`
+  - Types into whichever window is currently active.
+- `--no-gui`
+  - Runs in terminal mode instead of the progress dialog.
 
-Additional runtime controls:
+## GitHub Actions: Zero-Dependency Binary
 
-- `--skip-focus` to type into current foreground window only
-- `--no-gui` for terminal output instead of dialog/progress UI
+This repo now includes:
 
-## Example Stability Profiles
+- `.github/workflows/build-windows-binary.yml`
 
-Fast (if your session is stable):
+It builds a single-file Windows executable (`copy-citrix.exe`) using PyInstaller.
 
-```powershell
-python copy_citrix.py --reliable-key-delay 0.010 --reliable-chunk-size 220 --reliable-chunk-pause 0.05
+How to use:
+
+1. Push to `main` or run the workflow manually from GitHub Actions (`workflow_dispatch`).
+2. Open the completed workflow run.
+3. Download artifact `copy-citrix-windows`.
+4. Use `copy-citrix.exe` directly on Windows without installing Python/pip dependencies.
+
+## Windows Shortcut + Hotkey Setup
+
+You can run with one keyboard shortcut.
+
+1. Put `copy-citrix.exe` somewhere stable, e.g. `C:\Tools\copy-citrix.exe`.
+2. Right click Desktop -> New -> Shortcut.
+3. Set target to:
+```text
+"C:\Tools\copy-citrix.exe"
 ```
+4. Open shortcut Properties.
+5. Set a value in `Shortcut key`, e.g. `Ctrl+Alt+V`.
+6. Optional: set `Run` to `Minimized`.
+7. Apply and use that hotkey globally.
 
-Conservative (for long payloads/high latency):
+If you prefer script instead of EXE, target example:
 
-```powershell
-python copy_citrix.py --reliable-key-delay 0.020 --reliable-chunk-size 120 --reliable-chunk-pause 0.12 --refocus-each-chunk
+```text
+"C:\Path\to\pythonw.exe" "C:\Path\to\copy_citrix.py"
 ```

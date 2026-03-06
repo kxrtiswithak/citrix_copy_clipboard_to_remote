@@ -1,0 +1,35 @@
+name: Build Windows Binary
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller pyperclip pynput
+
+      - name: Build one-file executable
+        run: |
+          pyinstaller --noconfirm --clean --onefile --windowed --name copy-citrix copy_citrix.py
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: copy-citrix-windows
+          path: dist/copy-citrix.exe
+          if-no-files-found: error
